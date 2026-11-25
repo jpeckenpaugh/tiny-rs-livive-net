@@ -60,6 +60,7 @@
   <div class="toolbar">
     <strong>Tiny 2.1 (MS-DOS Transformer) on v86</strong>
     <button id="run_tiny">Run B:\TINY.EXE</button>
+    <button id="run_demo">Run TINY /DEMO</button>
     <button id="restart" class="secondary">Restart VM</button>
     <a href="jsdos.html" style="color:#58a6ff;font-size:13px;text-decoration:none;">Try js-dos version &rarr;</a>
     <span id="audio_status" style="font-size:12px;color:#8b949e;">Audio: suspended (click anywhere)</span>
@@ -71,7 +72,7 @@
   </div>
 
   <div class="hint">
-    Click inside the screen to focus keyboard. Once FreeDOS boots to <code>A:\&gt;</code>, click <strong>Run B:\TINY.EXE</strong> (or type <code>b:</code> then <code>tiny</code>).
+    Click inside the screen to focus keyboard &amp; unlock audio. <code>B:\TINY.EXE</code> auto-starts on boot. From the DOS prompt, you can also click <strong>Run B:\TINY.EXE</strong> or <strong>Run TINY /DEMO</strong>.
   </div>
 
   <script>
@@ -104,8 +105,12 @@
 
     document.getElementById("run_tiny").addEventListener("click", () => {
       unlockAudio();
-      emulator.keyboard_send_text("b:\r");
-      setTimeout(() => emulator.keyboard_send_text("tiny\r"), 150);
+      emulator.keyboard_send_text("b:\ntiny\n");
+    });
+
+    document.getElementById("run_demo").addEventListener("click", () => {
+      unlockAudio();
+      emulator.keyboard_send_text("b:\ntiny /demo\n");
     });
 
     document.getElementById("restart").addEventListener("click", () => {
