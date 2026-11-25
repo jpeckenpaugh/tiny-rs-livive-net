@@ -6,7 +6,7 @@
   python3 -I train2.py export MODEL.pt TINY.BIN    write the DOS weight file
 
 The model reads and writes one letter at a time (ASCII 32..126 plus newline)."""
-import sys, os, time, math, random, struct, re, collections
+import sys, os, time, math, random, struct, re, collections, multiprocessing
 import numpy as np
 import torch, torch.nn as nn, torch.nn.functional as F
 
@@ -337,8 +337,37 @@ def save_model(m, path):
 
 
 # ---------------------------------------------------------------- main
+def _gen_chunk(args):
+    seed, n = args
+    rng = random.Random(seed)
+    x = np.zeros((n, CTX), dtype=np.uint8)
+    m = np.zeros((n, CTX), dtype=np.uint8)
+    for i in range(n):
+        q, a, _ = gen2.sample(rng)
+        ids = encode(q + '\n' + a + '\n')[:CTX]
+        x[i, :len(ids)] = ids
+        qlen = len(q) + 1
+        if len(ids) > qlen:
+            m[i, qlen:len(ids)] = 1
+    return x, m
+
+
+def pregen_dataset(n_samples, device):
+    t0 = time.time()
+    workers = min(8, os.cpu_count() or 1)
+    chunk = max(1, (n_samples + workers - 1) // workers)
+    tasks = [(int(time.time() * 1000) + i, min(chunk, n_samples - i * chunk))
+             for i in range(workers) if n_samples - i * chunk > 0]
+    with multiprocessing.Pool(len(tasks)) as pool:
+        parts = pool.map(_gen_chunk, tasks)
+    X = torch.from_numpy(np.concatenate([p[0] for p in parts], axis=0)).to(device)
+    M = torch.from_numpy(np.concatenate([p[1] for p in parts], axis=0)).to(device)
+    print('pregen', len(X), 'samples on', device, 'in %.1fs' % (time.time() - t0), flush=True)
+    return X, M
+
+
 def train(minutes, out, start=None, cfg=Cfg(), peak=2e-3, bs=64, log_every=200, resume=None,
-          decay_frac=None, eval_every=0):
+          decay_frac=None, eval_every=0, pregen=0):
     """decay_frac=None: cosine schedule. decay_frac=f: constant LR, then a linear
     decay to zero over the last fraction f of the time (lets us stop and polish)."""
     torch.manual_seed(0)
@@ -349,8 +378,11 @@ def train(minutes, out, start=None, cfg=Cfg(), peak=2e-3, bs=64, log_every=200, 
         model = grow(load_old_bin(start), cfg) if start else Model(cfg)
     cfg = model.c
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if device.type == 'cuda':
+        torch.set_float32_matmul_precision('high')
     model = model.to(device)
-    print('model', cfg, 'parameters', sum(p.numel() for p in model.parameters()), 'device', device, flush=True)
+    print('model', cfg, 'parameters', sum(p.numel() for p in model.parameters()), 'device', device, 'bs', bs, flush=True)
+    X_pre, M_pre = pregen_dataset(pregen, device) if pregen > 0 else (None, None)
     decay = [p for p in model.parameters() if p.dim() == 2]
     other = [p for p in model.parameters() if p.dim() < 2]
     opt = torch.optim.AdamW([dict(params=decay, weight_decay=0.01), dict(params=other, weight_decay=0.0)],
@@ -375,8 +407,12 @@ def train(minutes, out, start=None, cfg=Cfg(), peak=2e-3, bs=64, log_every=200, 
             print('  EVAL at %.0f min: %.1f%%  %s' % (el / 60, 100 * tot, line), flush=True)
         for g in opt.param_groups:
             g['lr'] = lr
-        x, m = batch(rng, bs)
-        x, m = x.to(device), m.to(device)
+        if X_pre is not None:
+            idx = torch.randint(0, len(X_pre), (bs,), device=device)
+            x, m = X_pre[idx].long(), M_pre[idx].float()
+        else:
+            x, m = batch(rng, bs)
+            x, m = x.to(device), m.to(device)
         loss = loss_fn(model, x, m)
         opt.zero_grad(set_to_none=True)
         loss.backward()
@@ -408,6 +444,8 @@ if __name__ == '__main__':
         arg = lambda k, d=None: sys.argv[sys.argv.index(k) + 1] if k in sys.argv else d
         m = train(float(sys.argv[2]), sys.argv[3], arg('--from'), resume=arg('--resume'),
                   peak=float(arg('--lr', 2e-3)),
+                  bs=int(arg('--bs', 64)),
+                  pregen=int(arg('--pregen', 0)),
                   decay_frac=float(arg('--decay')) if arg('--decay') else None,
                   eval_every=float(arg('--eval-every', 0)))
         tot, line = evaluate(m, show=0)
