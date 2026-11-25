@@ -79,7 +79,7 @@ class Model(nn.Module):
                 nn.init.normal_(m.weight, std=0.5 / math.sqrt(m.in_features))
 
     def forward(self, idx):
-        x = self.emb(idx) + self.pos(torch.arange(idx.shape[1]))
+        x = self.emb(idx) + self.pos(torch.arange(idx.shape[1], device=idx.device))
         for b in self.blocks:
             x = b(x)
         return self.nf(x) @ self.emb.weight.t()
@@ -233,12 +233,13 @@ def correct(q, gen, refs, kind=None):
 def answer_many(model, qs):
     """Greedy answers, batched by question length."""
     model.eval()
+    dev = next(model.parameters()).device
     res = {}
     bylen = collections.defaultdict(list)
     for q in qs:
         bylen[len(q)].append(q)
     for n, group in bylen.items():
-        x = torch.tensor([encode(q + '\n') for q in group])
+        x = torch.tensor([encode(q + '\n') for q in group], device=dev)
         done = [False] * len(group)
         outs = [[] for _ in group]
         while x.shape[1] < CTX and not all(done):
@@ -347,7 +348,9 @@ def train(minutes, out, start=None, cfg=Cfg(), peak=2e-3, bs=64, log_every=200, 
     else:
         model = grow(load_old_bin(start), cfg) if start else Model(cfg)
     cfg = model.c
-    print('model', cfg, 'parameters', sum(p.numel() for p in model.parameters()), flush=True)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = model.to(device)
+    print('model', cfg, 'parameters', sum(p.numel() for p in model.parameters()), 'device', device, flush=True)
     decay = [p for p in model.parameters() if p.dim() == 2]
     other = [p for p in model.parameters() if p.dim() < 2]
     opt = torch.optim.AdamW([dict(params=decay, weight_decay=0.01), dict(params=other, weight_decay=0.0)],
@@ -373,6 +376,7 @@ def train(minutes, out, start=None, cfg=Cfg(), peak=2e-3, bs=64, log_every=200, 
         for g in opt.param_groups:
             g['lr'] = lr
         x, m = batch(rng, bs)
+        x, m = x.to(device), m.to(device)
         loss = loss_fn(model, x, m)
         opt.zero_grad(set_to_none=True)
         loss.backward()
