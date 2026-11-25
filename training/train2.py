@@ -367,7 +367,7 @@ def pregen_dataset(n_samples, device):
 
 
 def train(minutes, out, start=None, cfg=Cfg(), peak=2e-3, bs=64, log_every=200, resume=None,
-          decay_frac=None, eval_every=0, pregen=0):
+          decay_frac=None, eval_every=0, pregen=0, samples=0):
     """decay_frac=None: cosine schedule. decay_frac=f: constant LR, then a linear
     decay to zero over the last fraction f of the time (lets us stop and polish)."""
     torch.manual_seed(0)
@@ -382,7 +382,10 @@ def train(minutes, out, start=None, cfg=Cfg(), peak=2e-3, bs=64, log_every=200, 
         torch.set_float32_matmul_precision('high')
     model = model.to(device)
     print('model', cfg, 'parameters', sum(p.numel() for p in model.parameters()), 'device', device, 'bs', bs, flush=True)
-    X_pre, M_pre = pregen_dataset(pregen, device) if pregen > 0 else (None, None)
+    n_pre = samples if samples > 0 else pregen
+    X_pre, M_pre = pregen_dataset(n_pre, device) if n_pre > 0 else (None, None)
+    perm = torch.randperm(len(X_pre), device=device) if samples > 0 else None
+    total_steps = (len(X_pre) // bs) if samples > 0 else 0
     decay = [p for p in model.parameters() if p.dim() == 2]
     other = [p for p in model.parameters() if p.dim() < 2]
     opt = torch.optim.AdamW([dict(params=decay, weight_decay=0.01), dict(params=other, weight_decay=0.0)],
@@ -392,13 +395,19 @@ def train(minutes, out, start=None, cfg=Cfg(), peak=2e-3, bs=64, log_every=200, 
     eval_no = 0
     while True:
         el = time.time() - t0
-        if el > total:
-            break
+        if samples > 0:
+            if step >= total_steps:
+                break
+            prog = step / max(1, total_steps)
+        else:
+            if el > total:
+                break
+            prog = el / total
         warm = min(1.0, (step + 1) / 200)
         if decay_frac is None:
-            lr = peak * warm * (0.03 + 0.97 * 0.5 * (1 + math.cos(math.pi * el / total)))
+            lr = peak * warm * (0.03 + 0.97 * 0.5 * (1 + math.cos(math.pi * prog)))
         else:
-            left = (total - el) / (decay_frac * total)
+            left = (1.0 - prog) / decay_frac
             lr = peak * warm * min(1.0, max(0.0, left))
         if eval_every and el > (eval_no + 1) * eval_every * 60:
             eval_no += 1
@@ -407,7 +416,10 @@ def train(minutes, out, start=None, cfg=Cfg(), peak=2e-3, bs=64, log_every=200, 
             print('  EVAL at %.0f min: %.1f%%  %s' % (el / 60, 100 * tot, line), flush=True)
         for g in opt.param_groups:
             g['lr'] = lr
-        if X_pre is not None:
+        if perm is not None:
+            idx = perm[step * bs:(step + 1) * bs]
+            x, m = X_pre[idx].long(), M_pre[idx].float()
+        elif X_pre is not None:
             idx = torch.randint(0, len(X_pre), (bs,), device=device)
             x, m = X_pre[idx].long(), M_pre[idx].float()
         else:
@@ -446,6 +458,7 @@ if __name__ == '__main__':
                   peak=float(arg('--lr', 2e-3)),
                   bs=int(arg('--bs', 64)),
                   pregen=int(arg('--pregen', 0)),
+                  samples=int(arg('--samples', 0)),
                   decay_frac=float(arg('--decay')) if arg('--decay') else None,
                   eval_every=float(arg('--eval-every', 0)))
         tot, line = evaluate(m, show=0)
