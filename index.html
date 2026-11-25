@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tiny 2.1 on v86 (FreeDOS)</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 20px;
+      background: #111317;
+      color: #e6edf3;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+    }
+    .toolbar {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    button {
+      background: #238636;
+      color: #fff;
+      border: 1px solid #2ea043;
+      border-radius: 6px;
+      padding: 8px 14px;
+      font-family: inherit;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    button.secondary {
+      background: #21262d;
+      border-color: #30363d;
+    }
+    button:hover { opacity: 0.9; }
+    #screen_container {
+      border: 2px solid #30363d;
+      border-radius: 6px;
+      background: #000;
+      padding: 4px;
+    }
+    #screen_container div {
+      white-space: pre;
+      font: 14px monospace;
+      line-height: 14px;
+    }
+    .hint {
+      font-size: 12px;
+      color: #8b949e;
+      text-align: center;
+    }
+  </style>
+  <script src="v86/libv86.js"></script>
+</head>
+<body>
+  <div class="toolbar">
+    <strong>Tiny 2.1 (MS-DOS Transformer) on v86</strong>
+    <button id="run_tiny">Run B:\TINY.EXE</button>
+    <button id="restart" class="secondary">Restart VM</button>
+    <a href="jsdos.html" style="color:#58a6ff;font-size:13px;text-decoration:none;">Try js-dos version &rarr;</a>
+    <span id="audio_status" style="font-size:12px;color:#8b949e;">Audio: suspended (click anywhere)</span>
+  </div>
+
+  <div id="screen_container">
+    <div style="white-space: pre; font: 14px monospace; line-height: 14px"></div>
+    <canvas style="display: none"></canvas>
+  </div>
+
+  <div class="hint">
+    Click inside the screen to focus keyboard. Once FreeDOS boots to <code>A:\&gt;</code>, click <strong>Run B:\TINY.EXE</strong> (or type <code>b:</code> then <code>tiny</code>).
+  </div>
+
+  <script>
+    const emulator = new V86({
+      wasm_path: "v86/v86.wasm",
+      memory_size: 16 * 1024 * 1024,
+      vga_memory_size: 2 * 1024 * 1024,
+      screen_container: document.getElementById("screen_container"),
+      bios: { url: "v86/seabios.bin" },
+      vga_bios: { url: "v86/vgabios.bin" },
+      fda: { url: "v86/freedos722.img" },
+      fdb: { url: "v86/tiny21.img" },
+      autostart: true,
+    });
+
+    function unlockAudio() {
+      const ctx = emulator.speaker_adapter && emulator.speaker_adapter.audio_context;
+      if (!ctx) return;
+      if (ctx.state === "suspended") {
+        ctx.resume().then(() => {
+          document.getElementById("audio_status").textContent = "Audio: " + ctx.state;
+        });
+      } else {
+        document.getElementById("audio_status").textContent = "Audio: " + ctx.state;
+      }
+    }
+
+    window.addEventListener("pointerdown", unlockAudio);
+    window.addEventListener("keydown", unlockAudio);
+
+    document.getElementById("run_tiny").addEventListener("click", () => {
+      unlockAudio();
+      emulator.keyboard_send_text("b:\r");
+      setTimeout(() => emulator.keyboard_send_text("tiny\r"), 150);
+    });
+
+    document.getElementById("restart").addEventListener("click", () => {
+      emulator.restart();
+    });
+  </script>
+</body>
+</html>
